@@ -46,10 +46,30 @@ function createBookSpine(book, index) {
 
   const foot = document.createElement("div");
   foot.className = "spine-foot";
-  foot.textContent = book.status === "finished" ? "★".repeat(book.rating) : (book.author || "").slice(0, 2);
+  foot.textContent = book.status === "finished"
+    ? "★".repeat(book.rating)
+    : (book.status === "reading" ? (book.progress || 0) + "%" : (book.author || "").slice(0, 2));
 
   spine.appendChild(title);
   spine.appendChild(foot);
+
+  // 在读书：右侧细进度条 + 底部进度步进器（−/+）
+  if (book.status === "reading") {
+    const meter = document.createElement("div");
+    meter.className = "spine-progress";
+    const fill = document.createElement("div");
+    fill.className = "spine-progress-fill";
+    fill.style.height = (book.progress || 0) + "%";
+    meter.appendChild(fill);
+
+    const stepper = document.createElement("div");
+    stepper.className = "spine-stepper";
+    stepper.appendChild(makeStepBtn("−", () => adjustProgress(index, -5)));
+    stepper.appendChild(makeStepBtn("＋", () => adjustProgress(index, 5)));
+
+    spine.appendChild(meter);
+    spine.appendChild(stepper);
+  }
 
   // 点击书脊 → 打开编辑弹窗
   spine.addEventListener("click", () => openModal(index));
@@ -62,6 +82,29 @@ function createBookSpine(book, index) {
   spine.addEventListener("dragend", () => { spine.style.opacity = ""; });
 
   return spine;
+}
+
+// 步进按钮：点击只调进度，不触发抛中的卡片点击/弹窗
+function makeStepBtn(char, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "step-btn";
+  btn.textContent = char;
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+// 调整阅读进度：在读 ±delta，封顶 0–100
+function adjustProgress(index, delta) {
+  const b = books[index];
+  if (!b || b.status !== "reading") return;
+  b.progress = Math.max(0, Math.min(100, (b.progress || 0) + delta));
+  saveBooks();
+  render();
+  updateStats();
 }
 
 function render() {
@@ -225,6 +268,44 @@ function updateStats() {
 document.getElementById("searchBox").addEventListener("input", () => {
   render();
   updateStats();
+});
+
+// ===== 导出 / 导入备份 =====
+function exportBooks() {
+  const blob = new Blob([JSON.stringify(books, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "bookshelf-backup.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importBooks(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const arr = JSON.parse(reader.result);
+      if (!Array.isArray(arr)) throw new Error("bad");
+      books = arr;
+      saveBooks();
+      render();
+      updateStats();
+      alert("导入成功，共 " + books.length + " 本书");
+    } catch (e) {
+      alert("导入失败：所选文件不是有效的书架备份（.json）");
+    }
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById("exportBtn").addEventListener("click", exportBooks);
+document.getElementById("importBtn").addEventListener("click", () =>
+  document.getElementById("importFile").click()
+);
+document.getElementById("importFile").addEventListener("change", (ev) => {
+  if (ev.target.files && ev.target.files[0]) importBooks(ev.target.files[0]);
+  ev.target.value = "";
 });
 
 render();
