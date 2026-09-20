@@ -29,102 +29,100 @@ let books = loadBooks();
 
 const SHELF_TITLES = { reading: "在读", finished: "已读", want: "想读" };
 
-// ===== 渲染 =====
-function createCard(book, index) {
-  const card = document.createElement("div");
-  card.className = "book-card";
-  card.draggable = true;
+// ===== 渲染：拟物木书架（书脊）=====
+function createBookSpine(book, index) {
+  const spine = document.createElement("div");
+  spine.className = "book-spine tone-" + ((book.tone || ((index % 5) + 1)));
+  spine.draggable = true;
+  spine.title = `${book.name} — ${book.author || ""}`;
 
-  const cover = document.createElement("div");
-  cover.className = "book-cover";
-  cover.textContent = book.name.charAt(0);
+  // 在读：插书签；已读：银点
+  if (book.status === "reading") spine.classList.add("bookmark");
+  if (book.status === "finished" && book.rating >= 4) spine.classList.add("tick");
 
-  const info = document.createElement("div");
-  info.className = "book-info";
-  info.innerHTML = `<div class="book-name"></div><div class="book-author"></div><div class="book-meta"></div><div class="pilbox"></div>`;
-  info.querySelector(".book-name").textContent = book.name;
-  info.querySelector(".book-author").textContent = book.author;
+  const title = document.createElement("div");
+  title.className = "spine-title";
+  title.textContent = book.name;
 
-  const meta = info.querySelector(".book-meta");
-  if (book.status === "finished") {
-    meta.textContent = "★".repeat(book.rating) + "☆".repeat(5 - book.rating);
-  } else if (book.status === "reading") {
-    meta.textContent = "已读 " + book.progress + "%";
-    const wrap = document.createElement("div");
-    wrap.className = "progress-wrap";
-    const bar = document.createElement("div");
-    bar.className = "progress-bar";
-    bar.style.width = (book.progress || 0) + "%";
-    wrap.appendChild(bar);
-    info.appendChild(wrap);
-  } else {
-    meta.textContent = "待开卷";
-  }
+  const foot = document.createElement("div");
+  foot.className = "spine-foot";
+  foot.textContent = book.status === "finished" ? "★".repeat(book.rating) : (book.author || "").slice(0, 2);
 
-  const pilbox = info.querySelector(".pilbox");
-  (book.tags || []).forEach((t, i) => {
-    const pill = document.createElement("span");
-    pill.className = "pill " + (i === 0 ? "start" : "type");
-    pill.textContent = t;
-    pilbox.appendChild(pill);
-  });
+  spine.appendChild(title);
+  spine.appendChild(foot);
 
-  card.appendChild(cover);
-  card.appendChild(info);
-
-  // 点击卡片 → 打开编辑弹窗
-  card.addEventListener("click", () => openModal(index));
+  // 点击书脊 → 打开编辑弹窗
+  spine.addEventListener("click", () => openModal(index));
 
   // 拖拽：记录正在拖的是哪本书
-  card.addEventListener("dragstart", (ev) => {
+  spine.addEventListener("dragstart", (ev) => {
     ev.dataTransfer.setData("text/plain", String(index));
-    card.style.opacity = "0.4";
+    spine.style.opacity = "0.4";
   });
-  card.addEventListener("dragend", () => { card.style.opacity = ""; });
+  spine.addEventListener("dragend", () => { spine.style.opacity = ""; });
 
-  return card;
+  return spine;
 }
 
 function render() {
   const shelvesEl = document.getElementById("shelves");
   shelvesEl.innerHTML = "";
 
+  const kw = (document.getElementById("searchBox").value || "").trim().toLowerCase();
+  const bookcase = document.createElement("div");
+  bookcase.className = "bookcase";
+
   ["reading", "finished", "want"].forEach((status) => {
-    const indices = books.map((b, i) => (b.status === status ? i : -1)).filter((i) => i >= 0);
+    const indices = books
+      .map((b, i) => {
+        const hit = !kw ||
+          (b.name && b.name.toLowerCase().includes(kw)) ||
+          (b.author && b.author.toLowerCase().includes(kw)) ||
+          (b.tags || []).some((t) => t.toLowerCase().includes(kw));
+        return b.status === status && hit ? i : -1;
+      })
+      .filter((i) => i >= 0);
 
-    const col = document.createElement("section");
-    col.className = "shelf";
-    col.dataset.status = status;
+    const row = document.createElement("section");
+    row.className = "shelf-row";
+    row.dataset.status = status;
 
-    const head = document.createElement("div");
-    head.className = "shelf-head";
-    head.dataset.status = status;
-    head.innerHTML = `<span class="shelf-title">${SHELF_TITLES[status]}</span>
-                      <span class="shelf-count">${indices.length}</span>`;
+    const label = document.createElement("div");
+    label.className = "row-label";
+    label.innerHTML = `<b>${SHELF_TITLES[status]}</b><span>${indices.length} 本</span>`;
 
-    const body = document.createElement("div");
-    body.className = "shelf-body";
+    const booksEl = document.createElement("div");
+    booksEl.className = "books";
     if (indices.length === 0) {
-      body.innerHTML = `<div class="empty-tip">这栏还空着，点右上角添加</div>`;
+      const tip = document.createElement("div");
+      tip.className = "empty-tip bookline-empty";
+      tip.textContent = "这一层还是空的";
+      booksEl.appendChild(tip);
     } else {
-      indices.forEach((i) => body.appendChild(createCard(books[i], i)));
+      indices.forEach((i) => booksEl.appendChild(createBookSpine(books[i], i)));
     }
 
-    // 整列作为拖拽目标区
-    body.addEventListener("dragover", (ev) => ev.preventDefault());
-    body.addEventListener("drop", (ev) => {
+    const board = document.createElement("div");
+    board.className = "board";
+
+    // 拖到哪一层 = 状态变成哪一层
+    booksEl.addEventListener("dragover", (ev) => ev.preventDefault());
+    booksEl.addEventListener("drop", (ev) => {
       ev.preventDefault();
       const fromIndex = Number(ev.dataTransfer.getData("text/plain"));
       if (!Number.isInteger(fromIndex)) return;
-      books[fromIndex].status = status;   // 拖到哪列就变成哪个状态
+      books[fromIndex].status = status;
       saveBooks();
       render();
     });
 
-    col.appendChild(head);
-    col.appendChild(body);
-    shelvesEl.appendChild(col);
+    row.appendChild(label);
+    row.appendChild(booksEl);
+    row.appendChild(board);
+    bookcase.appendChild(row);
   });
+
+  shelvesEl.appendChild(bookcase);
 }
 
 // ===== 弹窗：添加 / 编辑 =====
@@ -222,6 +220,12 @@ function updateStats() {
     <div class="stat"><span class="stat-num">${avg}</span><span class="stat-label">平均评分</span></div>
   `;
 }
+
+// 搜索框：输入即实时过滤（input 事件 = 每敲一个字符触发一次）
+document.getElementById("searchBox").addEventListener("input", () => {
+  render();
+  updateStats();
+});
 
 render();
 updateStats();
