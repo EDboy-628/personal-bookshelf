@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>我的书架 · My Bookshelf</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1 class="site-title">📚 我的书架</h1>
+      <p class="site-sub">赵公子的小书房 · 同步测试 v1</p>
+      <button id="addBookBtn" class="btn-add" title="添加一本新书">＋ 添加书籍</button>
+    </div>
+  </header>
+
+  <main class="shelves" id="shelves">
+    <!-- 三栏书架由 script.js 动态渲染 -->
+  </main>
+
+  <!-- 添加 / 编辑书籍弹窗 -->
+  <div id="bookModal" class="modal-overlay hidden">
+    <div class="modal">
+      <button id="modalClose" class="modal-close" type="button">×</button>
+      <h2 id="modalTitle">添加书籍</h2>
+      <form id="bookForm">
+        <label>书名 <span class="req">*</span>
+          <input id="fName" required placeholder="例如：聪明的投资者" />
+        </label>
+        <label>作者
+          <input id="fAuthor" placeholder="例如：本杰明·格雷厄姆" />
+        </label>
+        <label>状态
+          <select id="fStatus">
+            <option value="reading">在读</option>
+            <option value="finished">已读</option>
+            <option value="want">想读</option>
+          </select>
+        </label>
+        <label id="fProgressWrap" class="hidden">已读进度 <input id="fProgress" type="number" min="0" max="100" /> %</label>
+        <label id="fRatingWrap" class="hidden">我的评分
+          <select id="fRating">
+            <option value="1">★☆☆☆☆</option>
+            <option value="2">★★☆☆☆</option>
+            <option value="3">★★★☆☆</option>
+            <option value="4">★★★★☆</option>
+            <option value="5" selected>★★★★★</option>
+          </select>
+        </label>
+        <label>标签（逗号分隔）
+          <input id="fTags" placeholder="例如：交易, 心理" />
+        </label>
+        <div class="modal-actions">
+          <button id="fDelete" type="button" class="btn-del hidden">删除这本书</button>
+          <button type="submit" class="btn-save">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span>Personal Bookshelf · pure front-end · data stays in your browser</span>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

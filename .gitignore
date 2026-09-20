@@ -1,0 +1,5 @@
+# 忽略临时测试脚本和预览截图（不纳入版本管理）
+*.png
+preview_screenshot.py
+interact_test.py
+__pycache__/
