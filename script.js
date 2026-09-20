@@ -203,4 +203,25 @@ document.getElementById("fDelete").addEventListener("click", () => {
   }
 });
 
+// ===== 顶部统计条 =====
+function updateStats() {
+  const el = document.getElementById("statsBar");
+  const total = books.length;
+  const reading = books.filter((b) => b.status === "reading").length;
+  const finished = books.filter((b) => b.status === "finished").length;
+  const want = books.filter((b) => b.status === "want").length;
+  const rated = books.filter((b) => b.rating > 0);
+  const avg = rated.length
+    ? (rated.reduce((s, b) => s + b.rating, 0) / rated.length).toFixed(1)
+    : "—";
+  el.innerHTML = `
+    <div class="stat"><span class="stat-num">${total}</span><span class="stat-label">藏书总数</span></div>
+    <div class="stat"><span class="stat-num">${reading}</span><span class="stat-label">在读</span></div>
+    <div class="stat"><span class="stat-num">${finished}</span><span class="stat-label">已读</span></div>
+    <div class="stat"><span class="stat-num">${want}</span><span class="stat-label">想读</span></div>
+    <div class="stat"><span class="stat-num">${avg}</span><span class="stat-label">平均评分</span></div>
+  `;
+}
+
 render();
+updateStats();
