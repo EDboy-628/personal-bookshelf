@@ -1,312 +1,362 @@
-// ===== 数据层：localStorage 持久化 =====
+// 保留原存储键，旧版数组备份可直接导入。
 const STORAGE_KEY = "bookshelf.books.v1";
-
-// 首次运行用默认示例数据，之后从 localStorage 读取
-function loadBooks() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    try { return JSON.parse(saved); } catch (e) { /* 数据损坏则回退默认 */ }
-  }
-  return defaultBooks();
-}
-
-// 每次改动都调用，把数组存回浏览器本地
-function saveBooks() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
-}
+const RECOVERY_KEY = "bookshelf.before-import.v1";
+const EXPORT_KEY = "bookshelf.last-export.v1";
+const DRAG_TYPE = "application/x-bookshelf-id";
+const SHELF_TITLES = { reading: "在读", finished: "已读", want: "想读" };
+const $ = (id) => document.getElementById(id);
+let loadError = "";
+let draggedId = null;
+let editingId = null;
+let pendingImport = null;
+let importRequest = 0;
+const deletedBooks = [];
 
 function defaultBooks() {
   return [
     { name: "知行合一·投资进阶", author: "交易者手册", status: "reading", progress: 62, rating: 0, tags: ["交易", "精进"] },
-    { name: "聪明的投资者",      author: "本杰明·格雷厄姆", status: "finished", progress: 100, rating: 5, tags: ["价值投资"] },
-    { name: "乌合之众",          author: "古斯塔夫·勒庞", status: "finished", progress: 100, rating: 4, tags: ["心理学"] },
-    { name: "周易",              author: "佚名", status: "want", progress: 0, rating: 0, tags: ["命理", "国学"] },
-    { name: "原则",              author: "瑞·达利欧", status: "want", progress: 0, rating: 0, tags: ["管理"] },
+    { name: "聪明的投资者", author: "本杰明·格雷厄姆", status: "finished", progress: 100, rating: 5, tags: ["价值投资"] },
+    { name: "乌合之众", author: "古斯塔夫·勒庞", status: "finished", progress: 100, rating: 4, tags: ["心理学"] },
+    { name: "周易", author: "佚名", status: "want", progress: 0, rating: 0, tags: ["命理", "国学"] },
+    { name: "原则", author: "瑞·达利欧", status: "want", progress: 0, rating: 0, tags: ["管理"] },
   ];
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.() || `book-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function withStatus(book, status) {
+  return {
+    ...book,
+    status,
+    progress: status === "finished" ? 100 : status === "want" ? 0 : book.progress,
+    rating: status === "finished" ? book.rating : 0,
+  };
+}
+
+function validateBooks(value) {
+  if (!Array.isArray(value)) throw new Error("备份内容必须是书籍数组。");
+  const ids = new Set();
+  return value.map((entry, index) => {
+    const fail = (reason) => { throw new Error(`第 ${index + 1} 本书：${reason}`); };
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("书籍格式不正确。");
+    if (typeof entry.name !== "string" || !entry.name.trim()) fail("书名不能为空。");
+    if (!Object.hasOwn(SHELF_TITLES, entry.status)) fail("阅读状态不正确。");
+    if (entry.author !== undefined && typeof entry.author !== "string") fail("作者应为文字。");
+    if (entry.tags !== undefined && (!Array.isArray(entry.tags) || entry.tags.some((tag) => typeof tag !== "string"))) fail("标签应为文字数组。");
+    const progress = entry.progress ?? 0;
+    const rating = entry.rating ?? 0;
+    if (typeof progress !== "number" || !Number.isFinite(progress) || progress < 0 || progress > 100) fail("进度必须在 0–100 之间。");
+    if (!Number.isInteger(rating) || rating < 0 || rating > 5) fail("评分必须是 0–5 的整数。");
+    let id = typeof entry.id === "string" && entry.id.trim() ? entry.id : newId();
+    if (ids.has(id)) id = newId();
+    ids.add(id);
+    return withStatus({
+      ...entry,
+      id,
+      name: entry.name.trim(),
+      author: (entry.author || "").trim(),
+      tags: [...new Set((entry.tags || []).map((tag) => tag.trim()).filter(Boolean))],
+      progress,
+      rating,
+      tone: Number.isInteger(entry.tone) && entry.tone >= 1 && entry.tone <= 5 ? entry.tone : (index % 5) + 1,
+    }, entry.status);
+  });
+}
+
+function loadBooks() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return validateBooks(saved === null ? defaultBooks() : JSON.parse(saved));
+  } catch {
+    loadError = "无法读取本地书架。原数据未改动，请导出原始数据留存，或导入有效备份。";
+    return [];
+  }
 }
 
 let books = loadBooks();
 
-const SHELF_TITLES = { reading: "在读", finished: "已读", want: "想读" };
+function notify(message, error = false) {
+  $("notice").textContent = message;
+  $("notice").classList.remove("hidden");
+  $("notice").classList.toggle("notice-error", error);
+  const dialog = document.querySelector("dialog[open]");
+  if (dialog) {
+    let feedback = dialog.querySelector(".dialog-feedback");
+    if (!feedback) {
+      feedback = document.createElement("p");
+      feedback.className = "dialog-feedback";
+      feedback.setAttribute("role", "status");
+      dialog.appendChild(feedback);
+    }
+    feedback.textContent = message;
+  }
+}
 
-// ===== 渲染：拟物木书架（书脊）=====
-function createBookSpine(book, index) {
-  const spine = document.createElement("div");
-  spine.className = "book-spine tone-" + ((book.tone || ((index % 5) + 1)));
+function commitBooks(next, { snapshot = false } = {}) {
+  if (loadError && !snapshot) {
+    notify(loadError, true);
+    return false;
+  }
+  try {
+    next = validateBooks(next);
+    if (snapshot) localStorage.setItem(RECOVERY_KEY, loadError ? localStorage.getItem(STORAGE_KEY) || "[]" : JSON.stringify(books));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch (error) {
+    notify(`保存失败，当前书架未改动。${error.message}`, true);
+    return false;
+  }
+  books = next;
+  loadError = "";
+  refresh();
+  return true;
+}
+
+function createBookSpine(book) {
+  const spine = document.createElement("button");
+  spine.type = "button";
+  spine.className = `book-spine tone-${book.tone}`;
+  spine.dataset.bookId = book.id;
   spine.draggable = true;
-  spine.title = `${book.name} — ${book.author || ""}`;
-
-  // 在读：插书签；已读：银点
+  spine.title = `${book.name}${book.author ? " — " + book.author : ""}`;
+  const detail = book.status === "reading" ? `${book.progress}%` : book.status === "finished" ? (book.rating ? `${book.rating} 星` : "未评分") : "";
+  spine.setAttribute("aria-label", `${spine.title}，${SHELF_TITLES[book.status]} ${detail}，点击编辑`);
   if (book.status === "reading") spine.classList.add("bookmark");
   if (book.status === "finished" && book.rating >= 4) spine.classList.add("tick");
-
-  const title = document.createElement("div");
+  const title = document.createElement("span");
   title.className = "spine-title";
   title.textContent = book.name;
-
-  const foot = document.createElement("div");
+  const foot = document.createElement("span");
   foot.className = "spine-foot";
-  foot.textContent = book.status === "finished"
-    ? "★".repeat(book.rating)
-    : (book.status === "reading" ? (book.progress || 0) + "%" : (book.author || "").slice(0, 2));
-
-  spine.appendChild(title);
-  spine.appendChild(foot);
-
-  // 在读书：右侧细进度条 + 底部进度步进器（−/+）
+  foot.textContent = detail || book.author.slice(0, 2);
+  spine.append(title, foot);
   if (book.status === "reading") {
-    const meter = document.createElement("div");
+    const meter = document.createElement("span");
     meter.className = "spine-progress";
-    const fill = document.createElement("div");
+    const fill = document.createElement("span");
     fill.className = "spine-progress-fill";
-    fill.style.height = (book.progress || 0) + "%";
+    fill.style.height = book.progress + "%";
     meter.appendChild(fill);
-
-    const stepper = document.createElement("div");
-    stepper.className = "spine-stepper";
-    stepper.appendChild(makeStepBtn("−", () => adjustProgress(index, -5)));
-    stepper.appendChild(makeStepBtn("＋", () => adjustProgress(index, 5)));
-
     spine.appendChild(meter);
-    spine.appendChild(stepper);
   }
-
-  // 点击书脊 → 打开编辑弹窗
-  spine.addEventListener("click", () => openModal(index));
-
-  // 拖拽：记录正在拖的是哪本书
+  spine.addEventListener("click", () => openModal(book.id));
   spine.addEventListener("dragstart", (ev) => {
-    ev.dataTransfer.setData("text/plain", String(index));
-    spine.style.opacity = "0.4";
+    draggedId = book.id;
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData(DRAG_TYPE, book.id);
+    spine.classList.add("dragging");
   });
-  spine.addEventListener("dragend", () => { spine.style.opacity = ""; });
-
+  spine.addEventListener("dragend", () => {
+    draggedId = null;
+    spine.classList.remove("dragging");
+    document.querySelectorAll(".col-target").forEach((el) => el.classList.remove("col-target"));
+  });
   return spine;
 }
 
-// 步进按钮：点击只调进度，不触发抛中的卡片点击/弹窗
-function makeStepBtn(char, onClick) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "step-btn";
-  btn.textContent = char;
-  btn.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    onClick();
-  });
-  return btn;
-}
-
-// 调整阅读进度：在读 ±delta，封顶 0–100
-function adjustProgress(index, delta) {
-  const b = books[index];
-  if (!b || b.status !== "reading") return;
-  b.progress = Math.max(0, Math.min(100, (b.progress || 0) + delta));
-  saveBooks();
-  render();
-  updateStats();
-}
-
 function render() {
-  const shelvesEl = document.getElementById("shelves");
-  shelvesEl.innerHTML = "";
-
-  const kw = (document.getElementById("searchBox").value || "").trim().toLowerCase();
+  const scrollPositions = new Map([...document.querySelectorAll(".books")].map((el) => [el.dataset.status, el.scrollLeft]));
+  const kw = $("searchBox").value.trim().toLowerCase();
   const bookcase = document.createElement("div");
   bookcase.className = "bookcase";
-
-  ["reading", "finished", "want"].forEach((status) => {
-    const indices = books
-      .map((b, i) => {
-        const hit = !kw ||
-          (b.name && b.name.toLowerCase().includes(kw)) ||
-          (b.author && b.author.toLowerCase().includes(kw)) ||
-          (b.tags || []).some((t) => t.toLowerCase().includes(kw));
-        return b.status === status && hit ? i : -1;
-      })
-      .filter((i) => i >= 0);
-
+  let matches = 0;
+  Object.keys(SHELF_TITLES).forEach((status) => {
+    const filtered = books.filter((b) => b.status === status && (!kw || [b.name, b.author, ...b.tags].some((text) => text.toLowerCase().includes(kw))));
+    matches += filtered.length;
     const row = document.createElement("section");
     row.className = "shelf-row";
-    row.dataset.status = status;
-
+    row.setAttribute("aria-label", SHELF_TITLES[status]);
     const label = document.createElement("div");
     label.className = "row-label";
-    label.innerHTML = `<b>${SHELF_TITLES[status]}</b><span>${indices.length} 本</span>`;
-
+    label.innerHTML = `<b>${SHELF_TITLES[status]}</b><span>${filtered.length} 本</span>`;
     const booksEl = document.createElement("div");
     booksEl.className = "books";
-    if (indices.length === 0) {
+    booksEl.dataset.status = status;
+    if (!filtered.length) {
       const tip = document.createElement("div");
       tip.className = "empty-tip bookline-empty";
-      tip.textContent = "这一层还是空的";
+      tip.textContent = kw ? "这一层没有匹配的书" : "这一层还没有书";
       booksEl.appendChild(tip);
-    } else {
-      indices.forEach((i) => booksEl.appendChild(createBookSpine(books[i], i)));
-    }
-
+    } else filtered.forEach((book) => booksEl.appendChild(createBookSpine(book)));
+    row.addEventListener("dragover", (ev) => {
+      if (!draggedId || !ev.dataTransfer.types.includes(DRAG_TYPE)) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+      row.classList.add("col-target");
+    });
+    row.addEventListener("dragleave", (ev) => { if (!row.contains(ev.relatedTarget)) row.classList.remove("col-target"); });
+    row.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      row.classList.remove("col-target");
+      const id = ev.dataTransfer.getData(DRAG_TYPE);
+      const book = books.find((b) => b.id === id);
+      if (!id || id !== draggedId || !book || book.status === status) return;
+      draggedId = null;
+      if (commitBooks(books.map((b) => b.id === id ? withStatus(b, status) : b))) notify(`《${book.name}》已移到「${SHELF_TITLES[status]}」。`);
+    });
     const board = document.createElement("div");
     board.className = "board";
-
-    // 拖到哪一层 = 状态变成哪一层
-    booksEl.addEventListener("dragover", (ev) => ev.preventDefault());
-    booksEl.addEventListener("drop", (ev) => {
-      ev.preventDefault();
-      const fromIndex = Number(ev.dataTransfer.getData("text/plain"));
-      if (!Number.isInteger(fromIndex)) return;
-      books[fromIndex].status = status;
-      saveBooks();
-      render();
-    });
-
-    row.appendChild(label);
-    row.appendChild(booksEl);
-    row.appendChild(board);
+    row.append(label, booksEl, board);
     bookcase.appendChild(row);
   });
-
-  shelvesEl.appendChild(bookcase);
+  $("shelves").replaceChildren(bookcase);
+  document.querySelectorAll(".books").forEach((el) => { el.scrollLeft = scrollPositions.get(el.dataset.status) || 0; });
+  $("clearSearch").classList.toggle("hidden", !$("searchBox").value);
+  $("searchSummary").textContent = kw ? `找到 ${matches} 本书（共 ${books.length} 本）。顶部统计为全部藏书。` : "点击书籍编辑进度和状态；电脑上也可拖动书籍换层。";
 }
 
-// ===== 弹窗：添加 / 编辑 =====
-const modal = document.getElementById("bookModal");
-const form = document.getElementById("bookForm");
-let editingIndex = null;   // null = 新增；数字 = 编辑第几本
-
-function openModal(index) {
-  editingIndex = index;
-  document.getElementById("modalTitle").textContent = index === null ? "添加书籍" : "编辑书籍";
-  document.getElementById("fDelete").classList.toggle("hidden", index === null);
-
-  if (index === null) {
-    form.reset();
-    setStatusVisibility("reading");
-  } else {
-    const b = books[index];
-    document.getElementById("fName").value = b.name;
-    document.getElementById("fAuthor").value = b.author || "";
-    document.getElementById("fStatus").value = b.status;
-    document.getElementById("fProgress").value = b.progress || 0;
-    document.getElementById("fRating").value = String(b.rating || 5);
-    document.getElementById("fTags").value = (b.tags || []).join(", ");
-    setStatusVisibility(b.status);
-  }
-  modal.classList.remove("hidden");
-}
-
-function closeModal() {
-  modal.classList.add("hidden");
-  editingIndex = null;
-}
-
-// 根据状态，显示/隐藏进度条输入和评分输入
-function setStatusVisibility(status) {
-  document.getElementById("fProgressWrap").classList.toggle("hidden", status !== "reading");
-  document.getElementById("fRatingWrap").classList.toggle("hidden", status !== "finished");
-}
-
-document.getElementById("addBookBtn").addEventListener("click", () => openModal(null));
-document.getElementById("modalClose").addEventListener("click", closeModal);
-modal.addEventListener("click", (ev) => { if (ev.target === modal) closeModal(); });
-document.getElementById("fStatus").addEventListener("change", (ev) => setStatusVisibility(ev.target.value));
-
-form.addEventListener("submit", (ev) => {
-  ev.preventDefault();
-  const data = {
-    name: document.getElementById("fName").value.trim(),
-    author: document.getElementById("fAuthor").value.trim(),
-    status: document.getElementById("fStatus").value,
-    tags: document.getElementById("fTags").value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
-  };
-  if (data.status === "reading") {
-    data.progress = Math.max(0, Math.min(100, Number(document.getElementById("fProgress").value) || 0));
-  } else {
-    data.progress = data.status === "finished" ? 100 : 0;
-  }
-  data.rating = data.status === "finished" ? Number(document.getElementById("fRating").value) : 0;
-
-  if (editingIndex === null) {
-    books.push(data);
-  } else {
-    books[editingIndex] = { ...books[editingIndex], ...data };
-  }
-  saveBooks();
-  render();
-  closeModal();
-});
-
-document.getElementById("fDelete").addEventListener("click", () => {
-  if (editingIndex !== null) {
-    books.splice(editingIndex, 1);
-    saveBooks();
-    render();
-    closeModal();
-  }
-});
-
-// ===== 顶部统计条 =====
 function updateStats() {
-  const el = document.getElementById("statsBar");
-  const total = books.length;
-  const reading = books.filter((b) => b.status === "reading").length;
-  const finished = books.filter((b) => b.status === "finished").length;
-  const want = books.filter((b) => b.status === "want").length;
-  const rated = books.filter((b) => b.rating > 0);
-  const avg = rated.length
-    ? (rated.reduce((s, b) => s + b.rating, 0) / rated.length).toFixed(1)
-    : "—";
-  el.innerHTML = `
-    <div class="stat"><span class="stat-num">${total}</span><span class="stat-label">藏书总数</span></div>
-    <div class="stat"><span class="stat-num">${reading}</span><span class="stat-label">在读</span></div>
-    <div class="stat"><span class="stat-num">${finished}</span><span class="stat-label">已读</span></div>
-    <div class="stat"><span class="stat-num">${want}</span><span class="stat-label">想读</span></div>
-    <div class="stat"><span class="stat-num">${avg}</span><span class="stat-label">平均评分</span></div>
-  `;
+  const rated = books.filter((b) => b.status === "finished" && b.rating > 0);
+  const avg = rated.length ? (rated.reduce((sum, b) => sum + b.rating, 0) / rated.length).toFixed(1) : "—";
+  const values = [[books.length, "藏书总数"], ...Object.entries(SHELF_TITLES).map(([status, title]) => [books.filter((b) => b.status === status).length, title]), [avg, "平均评分"]];
+  $("statsBar").innerHTML = values.map(([value, label]) => `<div class="stat"><span class="stat-num">${value}</span><span class="stat-label">${label}</span></div>`).join("");
 }
 
-// 搜索框：输入即实时过滤（input 事件 = 每敲一个字符触发一次）
-document.getElementById("searchBox").addEventListener("input", () => {
-  render();
-  updateStats();
+function updateBackupStatus() {
+  try {
+    const date = localStorage.getItem(EXPORT_KEY);
+    $("backupStatus").textContent = date && Number.isFinite(Date.parse(date)) ? `最近导出：${new Date(date).toLocaleString("zh-CN")}` : "尚未导出备份";
+    $("restoreBtn").classList.toggle("hidden", localStorage.getItem(RECOVERY_KEY) === null);
+  } catch { $("backupStatus").textContent = "浏览器存储不可用，请检查权限。"; }
+}
+
+function refresh() { render(); updateStats(); updateBackupStatus(); }
+
+function focusBook(id) {
+  const target = [...document.querySelectorAll(".book-spine")].find((el) => el.dataset.bookId === id);
+  if (target) target.focus();
+}
+
+function showDialog(dialog) {
+  dialog.querySelector(".dialog-feedback")?.remove();
+  dialog.showModal();
+  document.body.classList.add("dialog-open");
+}
+
+for (const dialog of document.querySelectorAll("dialog")) {
+  dialog.addEventListener("close", () => { if (!document.querySelector("dialog[open]")) document.body.classList.remove("dialog-open"); });
+}
+
+function openModal(id = null) {
+  const book = books.find((b) => b.id === id);
+  if (id !== null && !book) return;
+  editingId = id;
+  $("bookForm").reset();
+  $("modalTitle").textContent = book ? "编辑书籍" : "添加书籍";
+  $("fDelete").classList.toggle("hidden", !book);
+  $("fName").value = book?.name || "";
+  $("fAuthor").value = book?.author || "";
+  $("fStatus").value = book?.status || "reading";
+  $("fProgress").value = book?.progress || 0;
+  $("fRating").value = book?.rating || 0;
+  $("fTags").value = book?.tags.join(", ") || "";
+  setStatusVisibility($("fStatus").value);
+  showDialog($("bookModal"));
+  $("fName").focus();
+}
+
+function setStatusVisibility(status) {
+  $("fProgressWrap").classList.toggle("hidden", status !== "reading");
+  $("fRatingWrap").classList.toggle("hidden", status !== "finished");
+  $("fProgress").disabled = status !== "reading";
+  $("fRating").disabled = status !== "finished";
+}
+
+$("addBookBtn").addEventListener("click", () => openModal());
+$("modalClose").addEventListener("click", () => $("bookModal").close());
+$("bookModal").addEventListener("close", () => focusBook(editingId));
+$("fStatus").addEventListener("change", (ev) => setStatusVisibility(ev.target.value));
+for (const [id, delta] of [["progressMinus", -5], ["progressPlus", 5]]) $(id).addEventListener("click", () => { $("fProgress").value = Math.max(0, Math.min(100, (Number($("fProgress").value) || 0) + delta)); });
+
+$("bookForm").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  if (!$("fName").value.trim()) { $("fName").setCustomValidity("请输入书名，不能只填空格。"); $("fName").reportValidity(); return; }
+  const existing = books.find((b) => b.id === editingId);
+  const data = withStatus({ ...existing, id: editingId || newId(), name: $("fName").value.trim(), author: $("fAuthor").value.trim(), tags: $("fTags").value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean), progress: Number($("fProgress").value) || 0, rating: Number($("fRating").value) }, $("fStatus").value);
+  const next = existing ? books.map((b) => b.id === editingId ? data : b) : [...books, data];
+  if (commitBooks(next)) { const name = data.name; $("bookModal").close(); notify(`已保存《${name}》。`); }
 });
 
-// ===== 导出 / 导入备份 =====
+function updateUndo() { $("undoBar").classList.toggle("hidden", !deletedBooks.length); $("undoMessage").textContent = deletedBooks.length ? `已删除《${deletedBooks.at(-1).book.name}》` : ""; }
+$("fDelete").addEventListener("click", () => {
+  const index = books.findIndex((b) => b.id === editingId);
+  if (index < 0) return;
+  const book = books[index];
+  if (commitBooks(books.filter((b) => b.id !== editingId))) { deletedBooks.push({ book, index }); updateUndo(); $("bookModal").close(); notify(`已删除《${book.name}》，可以点击“撤销删除”。`); }
+});
+$("undoBtn").addEventListener("click", () => {
+  const deleted = deletedBooks.at(-1);
+  if (!deleted) return;
+  const next = [...books];
+  next.splice(Math.min(deleted.index, next.length), 0, deleted.book);
+  if (commitBooks(next)) { deletedBooks.pop(); updateUndo(); notify(`已恢复《${deleted.book.name}》。`); }
+});
+
+$("searchBox").addEventListener("input", render);
+$("clearSearch").addEventListener("click", () => { $("searchBox").value = ""; render(); $("searchBox").focus(); });
+
 function exportBooks() {
-  const blob = new Blob([JSON.stringify(books, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "bookshelf-backup.json";
-  a.click();
-  URL.revokeObjectURL(url);
+  try {
+    const content = loadError ? localStorage.getItem(STORAGE_KEY) : JSON.stringify(books, null, 2);
+    if (content === null) throw new Error("没有可导出的数据。");
+    const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bookshelf-${loadError ? "raw-" : "backup-"}${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try { localStorage.setItem(EXPORT_KEY, new Date().toISOString()); } catch { /* 下载不依赖时间记录。 */ }
+    updateBackupStatus(); notify("已发起备份下载，请确认文件已保存。");
+  } catch (error) { notify(`导出失败：${error.message}`, true); }
 }
 
-function importBooks(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const arr = JSON.parse(reader.result);
-      if (!Array.isArray(arr)) throw new Error("bad");
-      books = arr;
-      saveBooks();
-      render();
-      updateStats();
-      alert("导入成功，共 " + books.length + " 本书");
-    } catch (e) {
-      alert("导入失败：所选文件不是有效的书架备份（.json）");
-    }
-  };
-  reader.readAsText(file);
+function previewImport(imported, recovery = false) {
+  pendingImport = { books: imported, recovery };
+  $("importTitle").textContent = recovery ? "恢复导入前的书架" : "导入书架";
+  $("importSummary").textContent = `已校验 ${imported.length} 本书，当前书架有 ${books.length} 本。`;
+  $("importMode").value = recovery || loadError ? "replace" : "merge";
+  $("importConfirm").textContent = recovery ? "确认恢复" : "确认导入";
+  showDialog($("importModal"));
 }
-
-document.getElementById("exportBtn").addEventListener("click", exportBooks);
-document.getElementById("importBtn").addEventListener("click", () =>
-  document.getElementById("importFile").click()
-);
-document.getElementById("importFile").addEventListener("change", (ev) => {
-  if (ev.target.files && ev.target.files[0]) importBooks(ev.target.files[0]);
-  ev.target.value = "";
+async function importBooks(file) {
+  const request = ++importRequest;
+  try {
+    if (file.size > 5 * 1024 * 1024) throw new Error("文件超过 5 MB。");
+    const imported = validateBooks(JSON.parse((await file.text()).replace(/^\uFEFF/, "")));
+    if (request === importRequest) previewImport(imported);
+  } catch (error) { if (request === importRequest) notify(`导入失败，原书架未改动：${error.message}`, true); }
+}
+function mergeBooks(current, incoming) {
+  const key = (book) => JSON.stringify([book.name.toLowerCase(), book.author.toLowerCase()]);
+  const seen = new Set(current.map(key));
+  const seenIds = new Set(current.map((book) => book.id));
+  const additions = [];
+  incoming.forEach((book) => {
+    if (seen.has(key(book))) return;
+    seen.add(key(book));
+    const nextBook = { ...book };
+    while (seenIds.has(nextBook.id)) nextBook.id = newId();
+    seenIds.add(nextBook.id);
+    additions.push(nextBook);
+  });
+  return [...current, ...additions];
+}
+$("importConfirm").addEventListener("click", () => {
+  if (!pendingImport) return;
+  const next = $("importMode").value === "merge" ? mergeBooks(books, pendingImport.books) : pendingImport.books;
+  const added = next.length - books.length;
+  const skipped = pendingImport.books.length - added;
+  if (!commitBooks(next, { snapshot: true })) return;
+  deletedBooks.length = 0; updateUndo(); $("searchBox").value = ""; $("importModal").close();
+  notify($("importMode").value === "merge" ? `导入成功，新增 ${added} 本，跳过 ${skipped} 本重复书籍。` : `书架已更新，共 ${books.length} 本。可在页脚恢复操作前的书架。`);
 });
+$("exportBtn").addEventListener("click", exportBooks);
+$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", (ev) => { if (ev.target.files?.[0]) importBooks(ev.target.files[0]); ev.target.value = ""; });
+$("importClose").addEventListener("click", () => $("importModal").close());
+$("importCancel").addEventListener("click", () => $("importModal").close());
+$("importModal").addEventListener("close", () => { pendingImport = null; });
+$("restoreBtn").addEventListener("click", () => { try { const raw = localStorage.getItem(RECOVERY_KEY); if (raw === null) throw new Error("没有找到恢复副本。"); previewImport(validateBooks(JSON.parse(raw)), true); } catch (error) { notify(`无法恢复：${error.message} 当前书架未改动。`, true); } });
 
-render();
-updateStats();
+refresh();
+if (loadError) notify(loadError, true);

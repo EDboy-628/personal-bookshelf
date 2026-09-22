@@ -90,6 +90,9 @@ body {
   outline: none;
 }
 .search-box:focus { box-shadow: 0 0 0 3px rgba(255,235,190,.45); }
+.search-wrap { position: relative; }
+.search-wrap .search-box { padding-right: 36px; }
+.clear-search { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border: 0; border-radius: 50%; background: #d8b57e; color: #4a2f12; cursor: pointer; line-height: 1; }
 
 /* ===== 顶部统计条（木牌风格） ===== */
 .stats-bar {
@@ -120,6 +123,12 @@ body {
   padding: 22px 24px 34px;
   flex: 1;
 }
+.shelf-toolbar { max-width: 1180px; margin: 12px auto 0; padding: 0 24px; color: #725b40; font-size: 13px; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.shelf-toolbar p { min-height: 24px; }
+.undo-bar { display: flex; gap: 10px; align-items: center; color: #5f3a1c; white-space: nowrap; }
+.undo-bar .btn-tool { padding: 6px 10px; font-size: 12px; }
+.notice { max-width: 1180px; margin: 12px auto 0; padding: 9px 24px; color: #315b3d; font-size: 13px; }
+.notice-error { color: #a0412f; }
 .bookcase {
   background: var(--wood);
   border: 9px solid var(--wood-deep);
@@ -205,6 +214,9 @@ body {
   justify-content: space-between;
   padding: 9px 2px;
 }
+.book-spine { border: 0; font-family: inherit; }
+.book-spine:focus-visible, .btn-tool:focus-visible, .btn-add:focus-visible, .modal-close:focus-visible, .text-button:focus-visible { outline: 3px solid #ffe9b3; outline-offset: 3px; }
+.book-spine.dragging { opacity: .4; }
 .book-spine:hover { transform: translateY(-5px); filter: brightness(1.08); }
 .book-spine:active { transform: translateY(-1px); }
 
@@ -332,14 +344,8 @@ body {
 
 /* ===== 弹窗 ===== */
 .hidden { display: none !important; }
-.modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(35, 22, 10, 0.55);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 100; padding: 20px;
-}
 .modal {
-  width: 100%; max-width: 460px;
+  width: min(460px, calc(100% - 32px)); max-width: 460px;
   background: linear-gradient(180deg, #fdf7eb, #f3e9d6);
   border: 1px solid #b59368;
   border-radius: 12px;
@@ -347,6 +353,8 @@ body {
   box-shadow: 0 18px 50px rgba(0,0,0,.4);
   position: relative;
 }
+.modal::backdrop { background: rgba(35, 22, 10, .55); }
+.modal { color: #3a2c1d; }
 .modal h2 { font-size: 19px; margin-bottom: 16px; color: #4a3017; }
 .modal-close {
   position: absolute; top: 12px; right: 16px;
@@ -366,6 +374,12 @@ body {
   color: #3a2c1d;
 }
 .modal input:focus, .modal select:focus { border-color: #8a5a34; }
+.modal label[for="importMode"] { margin-top: 14px; }
+.progress-controls { display: flex; align-items: center; gap: 8px; }
+.progress-controls input { flex: 1; margin-top: 0; text-align: center; }
+.progress-controls .btn-tool { padding: 7px 9px; white-space: nowrap; }
+.field-hint { color: #8a7254; font-size: 12px; margin-top: 5px; }
+.dialog-feedback { margin-top: 12px; color: #a0412f; font-size: 13px; }
 .req { color: #b03a2e; }
 .modal-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
 .modal-actions button { border: none; cursor: pointer; border-radius: 8px; padding: 9px 20px; font-size: 14px; font-weight: 600; }
@@ -375,3 +389,23 @@ body {
 .btn-del:hover { background: #ecc9bf; }
 
 .col-target { outline: 2px dashed #ffe9b3; }
+.footer { display: grid; gap: 3px; justify-items: center; }
+.text-button { border: 0; background: transparent; color: #7a4a1f; text-decoration: underline; cursor: pointer; font: inherit; }
+
+@media (max-width: 700px) {
+  .topbar-inner { padding: 12px 16px; gap: 10px; }
+  .site-title { font-size: 22px; width: 100%; }
+  .site-sub { order: 4; width: 100%; font-size: 12px; }
+  .search-wrap { flex: 1; min-width: 0; }
+  .search-box { width: 100%; }
+  .btn-add, .btn-tool { padding: 9px 11px; }
+  .stats-bar, .shelves { padding-left: 16px; padding-right: 16px; }
+  .shelf-toolbar { padding: 0 16px; display: block; }
+  .undo-bar { margin-top: 6px; }
+  .row-label { width: 48px; font-size: 12px; letter-spacing: 0; }
+  .row-label b { font-size: 14px; }
+  .books { min-height: 184px; }
+  .book-spine { width: 35px; height: 156px; }
+  .modal { padding: 20px 18px 16px; }
+  .modal-actions button { padding: 10px 14px; }
+}
